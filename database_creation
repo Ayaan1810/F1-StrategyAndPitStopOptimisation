@@ -1,0 +1,100 @@
+import os
+import fastf1
+
+# Ensure cache directory exists
+cache_path = 'f1_cache'
+os.makedirs(cache_path, exist_ok=True)
+
+# Enable FastF1 cache
+fastf1.Cache.enable_cache(cache_path)
+
+import fastf1
+import pandas as pd
+from tqdm import tqdm
+
+# Enable FastF1 cache to avoid redownloading
+fastf1.Cache.enable_cache('f1_cache')
+
+# List of 2023 races
+race_names = [
+    "Bahrain", "Saudi Arabia", "Australia", "Azerbaijan", "Miami", "Monaco", "Spain",
+    "Canada", "Austria", "Great Britain", "Hungary", "Belgium", "Netherlands",
+    "Italy", "Singapore", "Japan", "Qatar", "United States", "Mexico", "Brazil",
+    "Las Vegas", "Abu Dhabi"
+]
+
+# Prepare a DataFrame to store all laps
+all_cleaned_laps = pd.DataFrame()
+
+# Loop through races and extract relevant info
+for race in tqdm(race_names, desc="🔄 Processing 2023 Races"):
+    try:
+        session = fastf1.get_session(2023, race, 'R')
+        session.load()
+
+        # Pick quick laps for better quality data
+        laps = session.laps.pick_quicklaps().copy()
+        if laps.empty:
+            print(f"⚠️ No quick laps found for {race}")
+            continue
+
+        # Basic cleanup
+        laps = laps.dropna(subset=["LapTime", "Driver", "Stint", "TyreLife", "Compound"])
+        laps["LapTimeSeconds"] = laps["LapTime"].dt.total_seconds()
+        laps["GrandPrix"] = race
+
+        # Add lap time delta (driver pace drop/increase)
+        laps["LapTimeDelta"] = laps.groupby("Driver")["LapTimeSeconds"].diff()
+
+        # Add gap to car ahead using lap order
+        laps_sorted = laps.sort_values(by=["LapNumber", "Position"])
+        laps_sorted["GapToCarAhead"] = laps_sorted.groupby("LapNumber")["LapTimeSeconds"].diff()
+        laps = laps_sorted.sort_index()
+
+        # Add TotalLaps and LapsRemaining per driver
+        laps["TotalLaps"] = laps.groupby("Driver")["LapNumber"].transform("max")
+        laps["LapsRemaining"] = laps["TotalLaps"] - laps["LapNumber"]
+
+        # Ensure track status is string for encoding
+        laps["TrackStatus"] = laps["TrackStatus"].astype(str)
+
+        # Merge with session-level weather info
+        weather = session.weather_data.set_index("Time").reset_index()
+        laps = pd.merge_asof(
+            laps.sort_values("Time"),
+            weather.sort_values("Time"),
+            on="Time",
+            direction="nearest"
+        )
+
+        all_cleaned_laps = pd.concat([all_cleaned_laps, laps], ignore_index=True)
+
+    except Exception as e:
+        print(f"❌ Error in {race}: {e}")
+
+# Final cleanup
+all_cleaned_laps.reset_index(drop=True, inplace=True)
+
+# Optional: fill small gaps in telemetry
+all_cleaned_laps["GapToCarAhead"] = all_cleaned_laps["GapToCarAhead"].fillna(0).clip(lower=0, upper=10)
+all_cleaned_laps["LapTimeDelta"] = all_cleaned_laps["LapTimeDelta"].fillna(0).clip(-5, 5)
+
+# Save dataset for model training
+all_cleaned_laps.to_csv("2023_all_gp_cleaned_laps.csv", index=False)
+
+# (Optional) Feather format for fast reload in training
+# all_cleaned_laps.to_feather("2023_all_gp_cleaned_laps.feather")
+
+print("✅ All telemetry data collected, cleaned, and enriched with strategy features!")
+print(f"📦 Saved: 2023_all_gp_cleaned_laps.csv ({len(all_cleaned_laps)} laps)")
+
+import pandas as pd
+
+# Load the dataset
+df = pd.read_csv("2023_all_gp_cleaned_laps.csv")
+
+# Print all column names
+print(df.columns.tolist())
+
+
+
