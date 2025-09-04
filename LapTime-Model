@@ -1,0 +1,82 @@
+import pandas as pd
+import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import mean_squared_error, r2_score
+import xgboost as xgb
+import numpy as np
+
+# ---------- Step 1: Load Cleaned Data ----------
+df = pd.read_csv("2023_all_gp_cleaned_laps.csv")
+
+# ---------- Step 2: Drop rows with missing or unreliable data ----------
+required_cols = [
+    "LapTimeSeconds", "TyreLife", "Stint", "Compound", "LapTimeDelta",
+    "GapToCarAhead", "TrackTemp", "LapNumber", "AirTemp", "Rainfall",
+    "Position", "Humidity", "WindSpeed"
+]
+
+# Drop rows with missing values
+df = df.dropna(subset=required_cols)
+
+# Optional cleanup (if columns exist):
+if "IsAccurate" in df.columns:
+    df = df[df["IsAccurate"] == True]
+if "Deleted" in df.columns:
+    df = df[df["Deleted"] == False]
+
+# Remove outlier laps (pit laps, very slow laps)
+df = df[(df["LapTimeSeconds"] > 40) & (df["LapTimeSeconds"] < 120)]
+
+# ---------- Step 3: Select Features ----------
+target = "LapTimeSeconds"
+categorical_features = ["Compound"]
+numeric_features = [
+    "TyreLife", "Stint", "LapNumber", "LapTimeDelta", "GapToCarAhead",
+    "TrackTemp", "AirTemp", "Rainfall", "Position", "Humidity", "WindSpeed"
+]
+
+# ---------- Step 4: Encode Categorical Features ----------
+encoder = OneHotEncoder(sparse_output=False, drop="first", handle_unknown='ignore')
+encoded_cat = encoder.fit_transform(df[categorical_features])
+encoded_cat_df = pd.DataFrame(encoded_cat, columns=encoder.get_feature_names_out(categorical_features))
+
+# ---------- Step 5: Combine All Features ----------
+X = pd.concat([df[numeric_features].reset_index(drop=True), encoded_cat_df.reset_index(drop=True)], axis=1)
+y = df[target].values
+
+# Save feature list for app integration
+joblib.dump(X.columns.tolist(), "lap_time_features.pkl")
+
+# ---------- Step 6: Train/Test Split ----------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# ---------- Step 7: Train Optimized XGBoost Regressor ----------
+model = xgb.XGBRegressor(
+    n_estimators=300,
+    max_depth=6,
+    learning_rate=0.05,
+    subsample=0.85,
+    colsample_bytree=0.9,
+    reg_lambda=2.0,
+    reg_alpha=1.0,
+    objective="reg:squarederror",
+    random_state=42
+)
+model.fit(X_train, y_train)
+
+# ---------- Step 8: Evaluate ----------
+y_pred = model.predict(X_test)
+r2 = r2_score(y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
+print("✅ R² Score:", round(r2, 3))
+print("✅ RMSE:", round(rmse, 3))
+
+# ---------- Step 9: Save Model and Encoder ----------
+joblib.dump(model, "tyre_degradation_xgb_model.joblib")
+joblib.dump(encoder, "compound_encoder.pkl")
+
+print("💾 Optimized XGBoost model, encoder, and feature list saved.")
