@@ -1,0 +1,118 @@
+import gradio as gr
+import pandas as pd
+import joblib
+
+# --- Load Models and Artifacts ---
+tyre_model = joblib.load("tyre_degradation_xgb_model.joblib")
+compound_encoder = joblib.load("compound_encoder.pkl")
+lap_time_features = joblib.load("lap_time_features.pkl")
+
+pit_model = joblib.load("pit_stop_predictor_model.joblib")
+pit_encoder = joblib.load("pit_stop_encoder.pkl")
+pit_features = joblib.load("pit_stop_feature_columns.pkl")
+
+# Dropdown options
+compound_options = compound_encoder.categories_[0].tolist()
+track_status_options = pit_encoder.categories_[1].tolist()
+
+# --- Prediction Function ---
+def predict_all(
+    tyre_life, stint, compound, track_status,
+    position, lap_time_delta, gap_to_ahead,
+    track_temp, rainfall, humidity, air_temp
+):
+    try:
+        # ---------- Tyre Degradation Prediction ----------
+        tyre_input = pd.DataFrame({
+            "TyreLife": [tyre_life],
+            "Stint": [stint],
+            "LapTimeDelta": [lap_time_delta],
+            "GapToCarAhead": [gap_to_ahead],
+            "TrackTemp": [track_temp]
+        })
+
+        compound_encoded = compound_encoder.transform([[compound]])
+        compound_df = pd.DataFrame(
+            compound_encoded,
+            columns=compound_encoder.get_feature_names_out(["Compound"])
+        )
+
+        final_tyre_input = pd.concat(
+            [tyre_input.reset_index(drop=True), compound_df.reset_index(drop=True)],
+            axis=1
+        )
+
+        # Ensure correct column order
+        final_tyre_input = final_tyre_input.reindex(columns=lap_time_features, fill_value=0)
+
+        predicted_lap_time = tyre_model.predict(final_tyre_input)[0]
+
+        # ---------- Pit Stop Prediction ----------
+        numeric_input = pd.DataFrame({
+            "TyreLife": [tyre_life],
+            "Stint": [stint],
+            "Position": [position],
+            "LapTimeDelta": [lap_time_delta],
+            "GapToCarAhead": [gap_to_ahead],
+            "TrackTemperature": [track_temp],
+            "Rainfall": [rainfall],
+            "Humidity": [humidity],
+            "AirTemperature": [air_temp]
+        })
+
+        pit_encoded = pit_encoder.transform([[compound, track_status]])
+        pit_encoded_df = pd.DataFrame(
+            pit_encoded,
+            columns=pit_encoder.get_feature_names_out(["Compound", "TrackStatus"])
+        )
+
+        final_pit_input = pd.concat(
+            [numeric_input.reset_index(drop=True), pit_encoded_df.reset_index(drop=True)],
+            axis=1
+        )
+        final_pit_input = final_pit_input.reindex(columns=pit_features, fill_value=0)
+
+        pit_proba = pit_model.predict_proba(final_pit_input)[0][1]
+        pit_result = "✅ Pit Stop Likely" if pit_proba > 0.3 else "🟩 No Pit Stop Expected"
+        confidence = f"(Confidence: {pit_proba:.2f})"
+
+        return round(predicted_lap_time, 3), f"{pit_result} {confidence}"
+
+    except Exception as e:
+        return "❌ Error", f"⚠️ {str(e)}"
+
+# --- Gradio Inputs ---
+inputs = [
+    gr.Slider(1, 30, step=1, label="Tyre Life (laps)"),
+    gr.Slider(1, 5, step=1, label="Stint Number"),
+    gr.Dropdown(compound_options, label="Compound Type"),
+    gr.Dropdown(track_status_options, label="Track Status"),
+
+    gr.Slider(1, 20, step=1, label="Driver Position (1=Leader)"),
+    gr.Number(label="Lap Time Delta (s)", value=0.0),
+    gr.Number(label="Gap to Car Ahead (s)", value=0.0),
+
+    gr.Number(label="Track Temperature (°C)", value=35),
+    gr.Number(label="Rainfall (mm)", value=0.0),
+    gr.Number(label="Humidity (%)", value=50),
+    gr.Number(label="Air Temperature (°C)", value=30)
+]
+
+outputs = [
+    gr.Number(label="Predicted Lap Time (s)"),
+    gr.Textbox(label="Pit Stop Prediction")
+]
+
+# --- Interface ---
+interface = gr.Interface(
+    fn=predict_all,
+    inputs=inputs,
+    outputs=outputs,
+    title="🏎️ F1 Tyre & Pit Strategy AI",
+    description=(
+        "🔧 Predict tyre degradation and pit stop probability using AI models trained on 2023 F1 race data. "
+        "This app considers tyre life, compound, stint, race position, lap deltas, and weather conditions."
+    )
+)
+
+interface.launch(debug=True, share=True)
