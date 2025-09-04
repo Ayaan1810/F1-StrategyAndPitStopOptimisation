@@ -1,0 +1,11 @@
+fastf1[all]
+gradio
+xgboost
+scikit-learn
+pandas
+joblib
+tqdm
+matplotlib
+lightgbm
+catboost
+numpy
