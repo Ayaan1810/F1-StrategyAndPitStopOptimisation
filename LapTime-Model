@@ -76,7 +76,13 @@ print("✅ R² Score:", round(r2, 3))
 print("✅ RMSE:", round(rmse, 3))
 
 # ---------- Step 9: Save Model and Encoder ----------
+# Save the trained model
 joblib.dump(model, "tyre_degradation_xgb_model.joblib")
+
+# Save the encoder for Compound
 joblib.dump(encoder, "compound_encoder.pkl")
 
-print("💾 Optimized XGBoost model, encoder, and feature list saved.")
+# Save the list of feature column names used for training
+joblib.dump(X.columns.tolist(), "lap_time_features.pkl")
+
+print("✅ Model, encoder, and feature list saved successfully!")
